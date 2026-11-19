@@ -1,7 +1,7 @@
 # v2 fix
 import os, threading, requests, time
 threading.Thread(target=lambda: __import__('http.server').HTTPServer(('0.0.0.0', int(os.environ.get('PORT',10000))), __import__('http.server').BaseHTTPRequestHandler).serve_forever(), daemon=True).start()
-threading.Thread(target=keep_alive, daemon=True).start()
+
 import requests, time, os
 TOKEN = os.environ.get('BOT_TOKEN')
 CHAT_ID = 7279745404
