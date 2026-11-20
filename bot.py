@@ -4,6 +4,15 @@ threading.Thread(target=lambda: __import__('http.server').HTTPServer(('0.0.0.0',
 
 import requests, time, os
 TOKEN = os.environ.get('BOT_TOKEN')
+import os, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+def keep_alive():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+keep_alive()
 CHAT_ID = 7279745404
 
 def send(t):
