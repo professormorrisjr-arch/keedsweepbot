@@ -76,7 +76,7 @@ def get_live_price(symbol, category):
 # ---------- MAIN ----------
 def main():
     print("KeedSweepBot started - XAUUSD, BTCUSD, EURUSD, GBPUSD, US30 - every 10s")
-    send("KeedSweepBot ONLINE ✅\nScanning XAUUSD + BTCUSD every 10s\nSweep + 5m close inside = Signal")
+    send("KeedSweepBot ONLINE ✅\nScanning XAUUSD, BTCUSD, EURUSD, GBPUSD, US30 every 10s\nSweep + 5m close inside = Signal")
 
     state = {s: {"swept": None, "current_5m_start": None, "done_this_hour": None} for s in SYMBOLS}
 
