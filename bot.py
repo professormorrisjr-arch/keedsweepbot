@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 SYMBOLS = {
     "XAUUSD": {"category": "linear", "name": "XAUUSD"},
     "BTCUSD": {"category": "inverse", "name": "BTCUSD"},
+       "EURUSD": {"category": "linear", "name": "EURUSD"},
+    "GBPUSD": {"category": "linear", "name": "GBPUSD"},
+    "US30": {"category": "linear", "name": "US30"},
 }
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
