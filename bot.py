@@ -12,14 +12,13 @@ bot = telebot.TeleBot(BOT_TOKEN)
 PAIRS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
-    "USD/JPY": "USDJPY=X",
-    "AUD/USD": "AUDUSD=X",
-    "USD/CAD": "USDCAD=X",
+    "EUR/JPY": "EURJPY=X",
     "XAU/USD": "GC=F",
+    "US30": "YM=F",
+    "NAS100": "NQ=F",
+    "USD/JPY": "USDJPY=X",
     "BTC/USD": "BTC-USD",
-    "ETH/USD": "ETH-USD",
 }
-
 sent_signals = set()
 
 def get_rsi(close, period=14):
