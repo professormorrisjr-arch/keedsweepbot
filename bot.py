@@ -6,9 +6,10 @@ import pandas as pd
 import numpy as np
 import telebot
 
-# --- TOKEN - works with BOTH names ---
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("CHAT_ID") or ""
+# --- TOKEN - works with BOTH TOKEN = "PASTE_YOUR_FULL_TOKEN_HERE"
+TOKEN = "9150633810:AAGGV8HhMKapNFmHdBXYt5NnGzmznbN9N50"
+CHAT_ID = "7279745404"
+
 
 if not TOKEN:
     print("❌ ERROR: No BOT TOKEN found. Add TELEGRAM_BOT_TOKEN in Render > Environment")
