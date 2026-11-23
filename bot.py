@@ -1,151 +1,89 @@
-import os
-import time
-import threading
-import requests
+import os, time, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import datetime, timedelta, timezone
+import yfinance as yf
+import telebot
 
-# ---------- CONFIG ----------
-SYMBOLS = {
-    "XAUUSD": {"category": "linear", "name": "XAUUSD"},
-    "BTCUSD": {"category": "inverse", "name": "BTCUSD"},
-       "EURUSD": {"category": "linear", "name": "EURUSD"},
-    "GBPUSD": {"category": "linear", "name": "GBPUSD"},
-    "US30": {"category": "linear", "name": "US30"},
-}
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SA = timezone(timedelta(hours=2))
-BYBIT = "https://api.bybit.com"
+TOKEN = os.environ.get("9150633810:AAGGV8HhMKapNFmHdBXYt5NnGzmznbN9N50")
+CHAT_ID = os.environ.get("7279745404", "")  # optional, bot will send to whoever did /start
+bot = telebot.TeleBot(TOKEN)
 
-# ---------- KEEP ALIVE ----------
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"KeedSweepBot is live!")
-    def log_message(self, *args):
-        pass
-
+# Keep alive for Render Free
 def keep_alive():
     port = int(os.environ.get("PORT", 10000))
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+keep_alive()
 
-threading.Thread(target=keep_alive, daemon=True).start()
+SYMBOLS = {
+    "XAUUSD": "GC=F",
+    "BTCUSD": "BTC-USD",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "US30": "^DJI"
+}
 
-# ---------- TELEGRAM ----------
-def send(msg):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Missing Telegram env vars")
-        return
+users = set()
+sent_signals = set()  # to avoid sending same signal twice
+
+@bot.message_handler(commands=['start'])
+def start(m):
+    users.add(m.chat.id)
+    bot.reply_to(m, "🔥 KeedSweepBot ONLINE! - Hunting EVERY HOUR\nPairs: XAUUSD, BTCUSD, EURUSD, GBPUSD, US30\nRule: Sweep 1H High/Low + 5min Close Back Inside\nSL = Wick, TP = Opposite 1H Range")
+
+def check_pair(name, ticker):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": msg}, timeout=10
-        )
-        print(f"SENT: {msg}")
-    except Exception as e:
-        print(f"Telegram error: {e}")
+        # Get 1H data - last 2 candles
+        df1h = yf.download(ticker, period="2d", interval="1h", progress=False)
+        if len(df1h) < 2:
+            return None
+        # Previous CLOSED 1H candle = range
+        prev = df1h.iloc[-2]
+        range_high = float(prev['High'])
+        range_low = float(prev['Low'])
+        range_time = str(df1h.index[-2])
 
-# ---------- BYBIT ----------
-def get_klines(symbol, category, interval, limit=5):
-    try:
-        r = requests.get(
-            f"{BYBIT}/v5/market/kline",
-            params={"category": category, "symbol": symbol, "interval": interval, "limit": limit},
-            timeout=10
-        )
-        data = list(reversed(r.json()["result"]["list"]))
-        return [{"start": int(x[0]), "open": float(x[1]), "high": float(x[2]),
-                 "low": float(x[3]), "close": float(x[4])} for x in data]
-    except Exception as e:
-        print(f"Kline error {symbol}: {e}")
-        return []
+        # Get 5min data - last 12 candles = current hour
+        df5 = yf.download(ticker, period="1d", interval="5m", progress=False)
+        if len(df5) < 2:
+            return None
+        # Last closed 5min candle
+        last5 = df5.iloc[-2]
+        high5 = float(last5['High'])
+        low5 = float(last5['Low'])
+        close5 = float(last5['Close'])
+        time5 = str(df5.index[-2])
 
-def get_live_price(symbol, category):
-    try:
-        r = requests.get(
-            f"{BYBIT}/v5/market/tickers",
-            params={"category": category, "symbol": symbol}, timeout=10
-        )
-        return float(r.json()["result"]["list"][0]["lastPrice"])
+        # Key to avoid duplicate
+        key = f"{name}-{range_time}-{time5}"
+
+        # SELL Sweep: wick above high, close back below high
+        if high5 > range_high and close5 < range_high and key not in sent_signals:
+            sent_signals.add(key)
+            return f"🔴 SELL SWEEP - {name}\n\n1H Range: {range_low:.2f} - {range_high:.2f}\nSwept: {high5:.2f}\n5min Close Back: {close5:.2f}\n\nEntry: {close5:.2f}\nSL: {high5:.2f} (wick)\nTP: {range_low:.2f} (opposite range)\n\nDEMO ONLY - Wait for YES"
+
+        # BUY Sweep: wick below low, close back above low
+        if low5 < range_low and close5 > range_low and key not in sent_signals:
+            sent_signals.add(key)
+            return f"🟢 BUY SWEEP - {name}\n\n1H Range: {range_low:.2f} - {range_high:.2f}\nSwept: {low5:.2f}\n5min Close Back: {close5:.2f}\n\nEntry: {close5:.2f}\nSL: {low5:.2f} (wick)\nTP: {range_high:.2f} (opposite range)\n\nDEMO ONLY - Wait for YES"
+        return None
     except Exception as e:
-        print(f"Price error {symbol}: {e}")
+        print(f"Error {name}: {e}")
         return None
 
-# ---------- MAIN ----------
-def main():
-    print("KeedSweepBot started - XAUUSD, BTCUSD, EURUSD, GBPUSD, US30 - every 10s")
-    send("KeedSweepBot ONLINE ✅\nScanning XAUUSD, BTCUSD, EURUSD, GBPUSD, US30 every 10s\nSweep + 5m close inside = Signal")
-
-    state = {s: {"swept": None, "current_5m_start": None, "done_this_hour": None} for s in SYMBOLS}
-
+def hunt_loop():
     while True:
-        try:
-            now = datetime.now(SA)
-            current_hour = now.replace(minute=0, second=0, microsecond=0)
+        for name, ticker in SYMBOLS.items():
+            sig = check_pair(name, ticker)
+            if sig and users:
+                for uid in users:
+                    try:
+                        bot.send_message(uid, sig)
+                    except Exception as e:
+                        print(e)
+            time.sleep(2)
+        print("Hunt done, waiting 5min...")
+        time.sleep(300)  # check every 5 min = every hour it will catch the sweep
 
-            for symbol, info in SYMBOLS.items():
-                cat = info["category"]
-                name = info["name"]
-                st = state[symbol]
-
-                if st["done_this_hour"] == current_hour:
-                    continue
-
-                # 1. REFERENCE = previous closed 1H
-                h1 = get_klines(symbol, cat, "60", limit=3)
-                if len(h1) < 2:
-                    continue
-                prev_1h = h1[-2]
-                ref_high, ref_low = prev_1h["high"], prev_1h["low"]
-
-                # 2. CURRENT 5m
-                m5 = get_klines(symbol, cat, "5", limit=3)
-                if len(m5) < 2:
-                    continue
-                current_5m = m5[-1]
-
-                # New 5m candle? Previous one just closed - check signal
-                if st["current_5m_start"] is not None and current_5m["start"] != st["current_5m_start"]:
-                    closed_5m = m5[-2]
-                    print(f"{name} 5m closed {closed_5m['close']} | swept={st['swept']} | ref {ref_low}-{ref_high}")
-
-                    if st["swept"] == "high" and closed_5m["close"] < ref_high:
-                        send(f"🔴 {name} SWEEP HIGH + CLOSE INSIDE\n"
-                             f"1H Ref: {ref_low} - {ref_high}\n"
-                             f"5m closed inside at {closed_5m['close']}\n"
-                             f"Signal: SHORT | {now.strftime('%H:%M')} SA")
-                        st["done_this_hour"] = current_hour
-                        st["swept"] = None
-
-                    elif st["swept"] == "low" and closed_5m["close"] > ref_low:
-                        send(f"🟢 {name} SWEEP LOW + CLOSE INSIDE\n"
-                             f"1H Ref: {ref_low} - {ref_high}\n"
-                             f"5m closed inside at {closed_5m['close']}\n"
-                             f"Signal: LONG | {now.strftime('%H:%M')} SA")
-                        st["done_this_hour"] = current_hour
-                        st["swept"] = None
-                    else:
-                        st["swept"] = None
-
-                st["current_5m_start"] = current_5m["start"]
-
-                # 3. LIVE PRICE SWEEP CHECK (every 10s)
-                price = get_live_price(symbol, cat)
-                if price is not None and st["swept"] is None:
-                    if price > ref_high:
-                        st["swept"] = "high"
-                        print(f"{name} SWEPT HIGH! {price} > {ref_high}")
-                    elif price < ref_low:
-                        st["swept"] = "low"
-                        print(f"{name} SWEPT LOW! {price} < {ref_low}")
-
-            time.sleep(10)
-
-        except Exception as e:
-            print(f"Loop error: {e}")
-            time.sleep(10)
-
-if __name__ == "__main__":
-    main()
+threading.Thread(target=hunt_loop, daemon=True).start()
+print("✅ KeedSweepBot ONLINE")
+bot.infinity_polling()
