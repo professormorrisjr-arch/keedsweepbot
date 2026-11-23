@@ -19,6 +19,7 @@ PAIRS = {
     "USD/JPY": "USDJPY=X",
     "BTC/USD": "BTC-USD",
 }
+}
 sent_signals = set()
 
 def get_rsi(close, period=14):
