@@ -121,9 +121,9 @@ def auto_loop():
             filtered = []
             now = time.time()
             for s in signals:
-            direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
-            pair = "?"
-            for p in PAIRS:
+               direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
+               pair = "?"
+               for p in PAIRS:
                 if p in s:
                     pair = p
                     break
