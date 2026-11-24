@@ -1,19 +1,3 @@
-import os
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-def _keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        def log_message(self, *a):
-            pass
-    HTTPServer(("0.0.0.0", port), H).serve_forever()
-
-threading.Thread(target=_keep_alive, daemon=True).start()
 import yfinance as yf
 import pandas as pd
 import telebot
@@ -22,6 +6,7 @@ import time
 
 BOT_TOKEN = "8752039586:AAE8Kf--uWOy9sxnz_eRDMZm003-nxOxjwQ"
 CHAT_ID = "7279745404"
+ALLOWED_USER_ID = 7279745404
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -29,14 +14,20 @@ PAIRS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
     "EUR/JPY": "EURJPY=X",
-    "XAU/USD": "GC=F",
-    "US30": "YM=F",
-    "NAS100": "NQ=F",
     "USD/JPY": "USDJPY=X",
+    "XAU/USD": "GC=F",
+    "US30": "^DJI",
+    "NAS100": "^NDX",
     "BTC/USD": "BTC-USD",
 }
 
 sent_signals = set()
+
+def is_allowed(message):
+    if message.from_user.id != ALLOWED_USER_ID:
+        bot.reply_to(message, "⛔ This bot is private.")
+        return False
+    return True
 
 def get_rsi(close, period=14):
     delta = close.diff()
@@ -78,7 +69,6 @@ def check_sweep(pair_name, symbol):
             low = float(row['Low'])
             rsi = float(row['RSI']) if not pd.isna(row['RSI']) else 50
 
-            # BEARISH SWEEP - Top
             if high > swing_high and price < swing_high and rsi > 65:
                 sent_signals.add(key)
                 sl = high + range_size * 0.1
@@ -87,7 +77,6 @@ def check_sweep(pair_name, symbol):
                 tp3 = swing_low - range_size * 0.5
                 return f"🚨 KeedSweep AUTO Signal\n\nSELL 🔴 {pair_name} @ {price:.5f}\nSweep of High + Closed Inside\nRSI: {rsi:.1f}\nSL: {sl:.5f}\nTP1: {tp1:.5f} (Middle - 50%)\nTP2: {tp2:.5f} (Opposite - 30%)\nTP3: {tp3:.5f} (Beyond - 20% Runner)"
 
-            # BULLISH SWEEP - Bottom
             if low < swing_low and price > swing_low and rsi < 35:
                 sent_signals.add(key)
                 sl = low - range_size * 0.1
@@ -121,10 +110,14 @@ def auto_loop():
 
 @bot.message_handler(commands=['start'])
 def start(m):
+    if not is_allowed(m):
+        return
     bot.reply_to(m, "KeedSweepBot ONLINE ✅\nAll 8 pairs active.\nSweep + 5m Close Inside logic ON.\nTP System B: TP1 Middle / TP2 Opposite / TP3 Beyond\nSend /scan to scan now.")
 
 @bot.message_handler(commands=['scan'])
 def scan(m):
+    if not is_allowed(m):
+        return
     bot.reply_to(m, "Scanning all 8 pairs for sweeps... 🔍")
     signals = scan_all()
     if not signals:
@@ -135,6 +128,8 @@ def scan(m):
 
 @bot.message_handler(commands=['status'])
 def status(m):
+    if not is_allowed(m):
+        return
     bot.reply_to(m, "KeedSweepBot ONLINE ✅\n8 pairs active\nMode: Sweep + 5m Close Inside\nTP: B - Middle / Opposite / Beyond\nScan: Every 15 min")
 
 print("Bot starting...")
