@@ -113,17 +113,15 @@ def scan_all():
         if s:
             signals.append(s)
     return signals
-
 def auto_loop():
     while True:
-        try:
-            signals = scan_all()
-            filtered = []
-            now = time.time()
-            for s in signals:
-               direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
-               pair = "?"
-               for p in PAIRS:
+        signals = scan_all()
+        filtered = []
+        now = time.time()
+        for s in signals:
+            direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
+            pair = "?"
+            for p in PAIRS:
                 if p in s:
                     pair = p
                     break
@@ -134,9 +132,7 @@ def auto_loop():
             filtered.append(s)
         for s in filtered:
             bot.send_message(CHAT_ID, s)
-            print(f"Scan done. Found {len(signals)} sweeps")
-            except Exception as e:
-                print(f"Auto loop error: {e}")
+        print(f"Scan done. Found: {len(filtered)} sweeps")
         time.sleep(900)
 
 @bot.message_handler(commands=['start'])
