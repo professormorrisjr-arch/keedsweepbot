@@ -135,8 +135,8 @@ def auto_loop():
         for s in filtered:
             bot.send_message(CHAT_ID, s)
             print(f"Scan done. Found {len(signals)} sweeps")
-        except Exception as e:
-            print(f"Auto loop error: {e}")
+            except Exception as e:
+                print(f"Auto loop error: {e}")
         time.sleep(900)
 
 @bot.message_handler(commands=['start'])
