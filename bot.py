@@ -24,6 +24,7 @@ ALLOWED_USER_ID = 7279745404
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+
 PAIRS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
@@ -34,6 +35,8 @@ PAIRS = {
     "NAS100": "^NDX",
     "BTC/USD": "BTC-USD",
 }
+
+LAST_SENT = {}   # ✅ OUTSIDE, after the }
 
 sent_signals = set()
 
@@ -115,8 +118,22 @@ def auto_loop():
     while True:
         try:
             signals = scan_all()
-            for s in signals:
-                bot.send_message(CHAT_ID, s)
+                    filtered = []
+        now = time.time()
+        for s in signals:
+            direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
+            pair = "?"
+            for p in PAIRS:
+                if p in s:
+                    pair = p
+                    break
+            key = f"{pair}-{direction}"
+            if key in LAST_SENT and now - LAST_SENT[key] < 3600:
+                continue
+            LAST_SENT[key] = now
+            filtered.append(s)
+        for s in filtered:
+            bot.send_message(CHAT_ID, s)
             print(f"Scan done. Found {len(signals)} sweeps")
         except Exception as e:
             print(f"Auto loop error: {e}")
