@@ -1,5 +1,2 @@
-pyTelegramBotAPI
-yfinance
-pandas
+python-telegram-bot
 Flask
-numpy
