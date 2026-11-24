@@ -118,9 +118,9 @@ def auto_loop():
     while True:
         try:
             signals = scan_all()
-                    filtered = []
-        now = time.time()
-        for s in signals:
+            filtered = []
+            now = time.time()
+            for s in signals:
             direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
             pair = "?"
             for p in PAIRS:
