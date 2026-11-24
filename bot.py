@@ -20,7 +20,7 @@ import telebot
 import threading
 import time
 
-BOT_TOKEN = "9150633810:AAGGV8HhMKapNFmHdBXYt5NnGzmznbN9N50"
+BOT_TOKEN = "8752039586:AAE8Kf--uWOy9sxnz_eRDMZm003-nxOxjwQ"
 CHAT_ID = "7279745404"
 
 bot = telebot.TeleBot(BOT_TOKEN)
