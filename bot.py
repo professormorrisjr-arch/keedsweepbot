@@ -57,9 +57,7 @@ def send_telegram(msg):
         print("Telegram error:", e)
 
 def is_session():
-    now_sa = datetime.now(SA_TZ)
-    h = now_sa.hour
-    # London 09:00-13:00 SA, NY 15:30-20:00 SA
+    return True, "Always On"
     if 9 <= h < 13:
         return True, "London 🇬🇧"
     if 15 <= h < 20:
