@@ -115,7 +115,7 @@ def check_pair(name, symbol):
          # Current hour start (SA time) -> convert to UTC to match Yahoo data
     hour_start_sa = now_sa.replace(minute=0, second=0, microsecond=0)
     hour_start_utc = hour_start_sa.astimezone(ZoneInfo("UTC"))
-          curr_m5 = df5m[pd.to_datetime(df5m.index) >= pd.Timestamp(hour_start_utc)]
+        curr_m5 = df5m[pd.to_datetime(df5m.index) >= pd.Timestamp(hour_start_utc)]
 
   
 
