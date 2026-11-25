@@ -232,7 +232,7 @@ def main_loop():
 # --- TELEGRAM COMMANDS: /start and /scan ---
 def get_updates(offset=None):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?timeout=5"
+        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?timeout=5"
         if offset:
             url += f"&offset={offset}"
         r = requests.get(url, timeout=10).json()
@@ -245,7 +245,7 @@ def listen_for_commands():
     print("Listening for /start and /scan...", flush=True)
     # Clear old stuck updates so old Render deploy stops stealing them
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-1", timeout=10)
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset=-1", timeout=10)
     except:
         pass
     while True:
