@@ -23,8 +23,8 @@ from datetime import datetime, timezone, timedelta
 import pytz
 
 # ============ CONFIG ============
-TOKEN = os.getenv("8752039586:AAE8Kf--uWOy9sxnz_eRDMZm003-nxOxjwQ")
-CHAT_ID = os.getenv("7279745404")
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 SA_TZ = pytz.timezone("Africa/Johannesburg")
 
 # 12 Pairs - Yahoo symbols
