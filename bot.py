@@ -1,164 +1,226 @@
-from flask import Flask
-import threading, os
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is alive!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-threading.Thread(target=run_flask, daemon=True).start()
-import yfinance as yf
-import pandas as pd
-import telebot
-import threading
+import os
 import time
+import requests
+import pandas as pd
+from datetime import datetime, timezone, timedelta
+import pytz
 
-BOT_TOKEN = "8752039586:AAE8Kf--uWOy9sxnz_eRDMZm003-nxOxjwQ"
-CHAT_ID = "7279745404"
-ALLOWED_USER_ID = 7279745404
+# ============ CONFIG ============
+TOKEN = os.getenv("8752039586:AAE8Kf--uWOy9sxnz_eRDMZm003-nxOxjwQ")
+CHAT_ID = os.getenv("7279745404")
+SA_TZ = pytz.timezone("Africa/Johannesburg")
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-
+# 12 Pairs - Yahoo symbols
 PAIRS = {
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
-    "EUR/JPY": "EURJPY=X",
-    "USD/JPY": "USDJPY=X",
     "XAU/USD": "GC=F",
     "US30": "^DJI",
-    "NAS100": "^NDX",
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CAD": "USDCAD=X",
+    "NZD/USD": "NZDUSD=X",
+    "EUR/GBP": "EURGBP=X",
+    "GBP/JPY": "GBPJPY=X",
+    "USD/CHF": "USDCHF=X",
     "BTC/USD": "BTC-USD",
 }
 
-LAST_SENT = {}   # ✅ OUTSIDE, after the }
+# Track 1 signal per hour per pair
+last_signal_hour = {}
 
-sent_signals = set()
-
-def is_allowed(message):
-    if message.from_user.id != ALLOWED_USER_ID:
-        bot.reply_to(message, "⛔ This bot is private.")
-        return False
-    return True
-
-def get_rsi(close, period=14):
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def check_sweep(pair_name, symbol):
+def send_telegram(msg):
+    if not TOKEN or not CHAT_ID:
+        print("Missing TOKEN / CHAT_ID")
+        return
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
-        df_1h = yf.download(symbol, period="2d", interval="1h", progress=False)
-        if df_1h.empty or len(df_1h) < 5:
-            return None
-        if isinstance(df_1h.columns, pd.MultiIndex):
-            df_1h.columns = df_1h.columns.get_level_values(0)
-
-        swing_high = df_1h['High'].iloc[-3:-1].max()
-        swing_low = df_1h['Low'].iloc[-3:-1].min()
-        middle = (swing_high + swing_low) / 2
-        range_size = swing_high - swing_low
-
-        df_5m = yf.download(symbol, period="1d", interval="5m", progress=False)
-        if df_5m.empty or len(df_5m) < 10:
-            return None
-        if isinstance(df_5m.columns, pd.MultiIndex):
-            df_5m.columns = df_5m.columns.get_level_values(0)
-
-        df_5m['RSI'] = get_rsi(df_5m['Close'])
-
-        for i in range(len(df_5m)-4, len(df_5m)-1):
-            row = df_5m.iloc[i]
-            candle_time = str(df_5m.index[i])
-            key = f"{pair_name}-{candle_time}-{row['Close']:.2f}"
-            if key in sent_signals:
-                continue
-
-            price = float(row['Close'])
-            high = float(row['High'])
-            low = float(row['Low'])
-            rsi = float(row['RSI']) if not pd.isna(row['RSI']) else 50
-
-            if high > swing_high and price < swing_high and rsi > 65:
-                sent_signals.add(key)
-                sl = high + range_size * 0.1
-                tp1 = middle
-                tp2 = swing_low
-                tp3 = swing_low - range_size * 0.5
-                return f"🚨 KeedSweep AUTO Signal\n\nSELL 🔴 {pair_name} @ {price:.5f}\nSweep of High + Closed Inside\nRSI: {rsi:.1f}\nSL: {sl:.5f}\nTP1: {tp1:.5f} (Middle - 50%)\nTP2: {tp2:.5f} (Opposite - 30%)\nTP3: {tp3:.5f} (Beyond - 20% Runner)"
-
-            if low < swing_low and price > swing_low and rsi < 35:
-                sent_signals.add(key)
-                sl = low - range_size * 0.1
-                tp1 = middle
-                tp2 = swing_high
-                tp3 = swing_high + range_size * 0.5
-                return f"🚨 KeedSweep AUTO Signal\n\nBUY 🟢 {pair_name} @ {price:.5f}\nSweep of Low + Closed Inside\nRSI: {rsi:.1f}\nSL: {sl:.5f}\nTP1: {tp1:.5f} (Middle - 50%)\nTP2: {tp2:.5f} (Opposite - 30%)\nTP3: {tp3:.5f} (Beyond - 20% Runner)"
-        return None
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
-        print(f"Error {pair_name}: {e}")
-        return None
+        print("Telegram error:", e)
 
-def scan_all():
-    signals = []
-    for name, sym in PAIRS.items():
-        s = check_sweep(name, sym)
-        if s:
-            signals.append(s)
-    return signals
-def auto_loop():
-    while True:
-        signals = scan_all()
-        filtered = []
-        now = time.time()
-        for s in signals:
-            direction = "BUY" if "BUY" in s else "SELL" if "SELL" in s else "?"
-            pair = "?"
-            for p in PAIRS:
-                if p in s:
-                    pair = p
+def is_session():
+    now_sa = datetime.now(SA_TZ)
+    h = now_sa.hour
+    # London 09:00-13:00 SA, NY 15:30-20:00 SA
+    if 9 <= h < 13:
+        return True, "London 🇬🇧"
+    if 15 <= h < 20:
+        return True, "New York 🇺🇸"
+    return False, "Off Session"
+
+def get_data(symbol):
+    # Get 1H + 5Min from Yahoo
+    try:
+        url_1h = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1h&range=2d"
+        url_5m = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d"
+        r1 = requests.get(url_1h, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).json()
+        r5 = requests.get(url_5m, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).json()
+        h1 = r1["chart"]["result"][0]
+        h5 = r5["chart"]["result"][0]
+        df1h = pd.DataFrame({
+            "Time": pd.to_datetime(h1["timestamp"], unit="s", utc=True),
+            "High": h1["indicators"]["quote"][0]["high"],
+            "Low": h1["indicators"]["quote"][0]["low"],
+            "Close": h1["indicators"]["quote"][0]["close"],
+        })
+        df5m = pd.DataFrame({
+            "Time": pd.to_datetime(h5["timestamp"], unit="s", utc=True),
+            "Open": h5["indicators"]["quote"][0]["open"],
+            "High": h5["indicators"]["quote"][0]["high"],
+            "Low": h5["indicators"]["quote"][0]["low"],
+            "Close": h5["indicators"]["quote"][0]["close"],
+        })
+        return df1h.dropna(), df5m.dropna()
+    except Exception as e:
+        print(f"Data error {symbol}:", e)
+        return None, None
+
+def check_pair(name, symbol):
+    df1h, df5m = get_data(symbol)
+    if df1h is None or len(df1h) < 2 or len(df5m) < 3:
+        return
+
+    now_sa = datetime.now(SA_TZ)
+    # Previous 1H candle = Range
+    prev_1h = df1h.iloc[-2]
+    range_high = float(prev_1h["High"])
+    range_low = float(prev_1h["Low"])
+    range_size = range_high - range_low
+    if range_size <= 0:
+        return
+    mid_range = (range_high + range_low) / 2
+
+    # Hour key for 1 signal per hour
+    hour_key = f"{name}_{now_sa.strftime('%Y-%m-%d-%H')}"
+    if hour_key in last_signal_hour:
+        return
+
+    # Current hour start (SA time)
+    hour_start_sa = now_sa.replace(minute=0, second=0, microsecond=0)
+    hour_start_utc = hour_start_sa.astimezone(timezone.utc).replace(tzinfo=None)
+    # 5Min candles of current hour only
+    curr_m5 = df5m[df5m["Time"] >= pd.Timestamp(hour_start_utc)]
+    if len(curr_m5) == 0:
+        return
+
+    # --- 0:15 RULE ---
+    # Only check if we are within first 15 mins of new hour
+    if now_sa.minute > 15:
+        return
+
+    # --- RULE: No close inside before sweep ---
+    # If any earlier 5m candle in this hour already closed inside range before sweep, cancel
+    # We check in order
+    sweep_side = None
+    sweep_close = None
+    sweep_idx = -1
+
+    for i in range(len(curr_m5)):
+        c = curr_m5.iloc[i]
+        o, h, l, cl = float(c["Open"]), float(c["High"]), float(c["Low"]), float(c["Close"])
+        # If price already closed inside range BEFORE any sweep, this hour is dead
+        if range_low < cl < range_high and sweep_side is None:
+            # First candle closing inside without sweep = price lived inside, cancel
+            # But allow if it's the sweep candle itself (handled below)
+            # If open was outside and close inside with wick sweep, that's sweep
+            # Check sweep first
+            pass
+
+        # Check sweep High: wick above High, close back inside
+        if h > range_high and range_low < cl < range_high:
+            # Must be first touch - check no earlier sweep in this hour
+            if sweep_side is None:
+                # Check earlier candles didn't already close inside
+                earlier = curr_m5.iloc[:i]
+                already_inside = False
+                for _, ec in earlier.iterrows():
+                    if range_low < float(ec["Close"]) < range_high:
+                        already_inside = True
+                        break
+                if not already_inside:
+                    sweep_side = "HIGH"
+                    sweep_close = cl
+                    sweep_idx = i
                     break
-            key = f"{pair}-{direction}"
-            if key in LAST_SENT and now - LAST_SENT[key] < 3600:
-                continue
-            LAST_SENT[key] = now
-            filtered.append(s)
-        for s in filtered:
-            bot.send_message(CHAT_ID, s)
-        print(f"Scan done. Found: {len(filtered)} sweeps")
-        time.sleep(900)
+        # Check sweep Low: wick below Low, close back inside
+        if l < range_low and range_low < cl < range_high:
+            if sweep_side is None:
+                earlier = curr_m5.iloc[:i]
+                already_inside = False
+                for _, ec in earlier.iterrows():
+                    if range_low < float(ec["Close"]) < range_high:
+                        already_inside = True
+                        break
+                if not already_inside:
+                    sweep_side = "LOW"
+                    sweep_close = cl
+                    sweep_idx = i
+                    break
 
-@bot.message_handler(commands=['start'])
-def start(m):
-    if not is_allowed(m):
+    if sweep_side is None:
         return
-    bot.reply_to(m, "KeedSweepBot ONLINE ✅\nAll 8 pairs active.\nSweep + 5m Close Inside logic ON.\nTP System B: TP1 Middle / TP2 Opposite / TP3 Beyond\nSend /scan to scan now.")
 
-@bot.message_handler(commands=['scan'])
-def scan(m):
-    if not is_allowed(m):
-        return
-    bot.reply_to(m, "Scanning all 8 pairs for sweeps... 🔍")
-    signals = scan_all()
-    if not signals:
-        bot.reply_to(m, "No sweeps found. Market is clean, waiting. ✅")
+    # --- VALID SIGNAL - TP1 / TP2 / SL (YOUR LOCKED VERSION) ---
+    session, session_name = is_session()
+    # Sweep wick = High/Low of sweep candle
+    sweep_candle = curr_m5.iloc[sweep_idx]
+    sweep_high_wick = float(sweep_candle["High"])
+    sweep_low_wick = float(sweep_candle["Low"])
+
+    if sweep_side == "HIGH":
+        direction = "SELL 🔴"
+        entry = sweep_close
+        sl = sweep_high_wick + (range_size * 0.1)  # 10% buffer above wick
+        tp1 = mid_range  # 50% of range
+        tp2 = range_low  # Opposite point = Low
+        rr1 = abs(entry - tp1) / abs(entry - sl) if entry != sl else 0
+        rr2 = abs(entry - tp2) / abs(entry - sl) if entry != sl else 0
     else:
-        for s in signals:
-            bot.send_message(m.chat.id, s)
+        direction = "BUY 🟢"
+        entry = sweep_close
+        sl = sweep_low_wick - (range_size * 0.1)  # 10% buffer below wick
+        tp1 = mid_range  # 50% of range
+        tp2 = range_high  # Opposite point = High
+        rr1 = abs(tp1 - entry) / abs(sl - entry) if entry != sl else 0
+        rr2 = abs(tp2 - entry) / abs(sl - entry) if entry != sl else 0
 
-@bot.message_handler(commands=['status'])
-def status(m):
-    if not is_allowed(m):
-        return
-    bot.reply_to(m, "KeedSweepBot ONLINE ✅\n8 pairs active\nMode: Sweep + 5m Close Inside\nTP: B - Middle / Opposite / Beyond\nScan: Every 15 min")
+    msg = (
+        f"🔥 *{name} {direction}*\n"
+        f"Session: {session_name}\n"
+        f"Time: {now_sa.strftime('%H:%M')} SA\n"
+        f"1H Range: {range_low:.2f} - {range_high:.2f}\n"
+        f"Range Size: {range_size:.2f}\n"
+        f"Sweep: {sweep_side} within 0:15 ✅\n"
+        f"5Min Close Inside ✅\n"
+        f"----------------\n"
+        f"Entry: {entry:.2f}\n"
+        f"SL: {sl:.2f}\n"
+        f"TP1 (50% Range): {tp1:.2f} | RR ~{rr1:.2f}R\n"
+        f"TP2 (Opposite): {tp2:.2f} | RR ~{rr2:.2f}R\n"
+        f"----------------\n"
+        f"Plan: Take 50% at TP1, move SL to BE, let rest run to TP2"
+    )
+    print(msg)
+    send_telegram(msg)
+    last_signal_hour[hour_key] = True
 
-print("Bot starting...")
-threading.Thread(target=auto_loop, daemon=True).start()
-bot.infinity_polling()
+def main_loop():
+    send_telegram("✅ KeedSweepBot ONLINE - 1H Sweep | 0:15 | TP1 50% / TP2 Opposite | 12 Pairs")
+    while True:
+        session, session_name = is_session()
+        if session:
+            for name, symbol in PAIRS.items():
+                try:
+                    check_pair(name, symbol)
+                except Exception as e:
+                    print(f"Error {name}:", e)
+                time.sleep(2)
+            print(f"Scan done {datetime.now(SA_TZ).strftime('%H:%M')} - {session_name}")
+            time.sleep(60)  # scan every 1 min during session
+        else:
+            print(f"Off session {datetime.now(SA_TZ).strftime('%H:%M')} - sleeping")
+            time.sleep(300)
+
+if __name__ == "__main__":
+    main_loop()
