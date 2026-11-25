@@ -107,25 +107,13 @@ def check_pair(name, symbol):
     if range_size <= 0:
         return
     mid_range = (range_high + range_low) / 2
-
+    
     # Hour key for 1 signal per hour
     hour_key = f"{name}_{now_sa.strftime('%Y-%m-%d-%H')}"
     if hour_key in last_signal_hour:
         return
 
-    # Hour key for 1 signal per hour
-    hour_key = f"{symbol}_{now_sa.strftime('%Y-%m-%d-%H')}"
-    if hour_key in last_signal_hour:
-        return
-    # Current hour start (SA time) -> convert to UTC to match Yahoo data
-    hour_start_sa = now_sa.replace(minute=0, second=0, microsecond=0)
-    hour_start_utc = hour_start_sa.astimezone(ZoneInfo("UTC"))
-    df_now = df[df.index >= pd.Timestamp(hour_start_utc)]
-    # --- 0:15 RULE ---
-    # Only check if we are within first 15 mins of new hour
-    # 0:15 candle closes at 0:16 - start checking from 0:16
-    if now_sa.minute > 15:
-        return
+  
 
     # --- RULE: No close inside before sweep ---
     # If any earlier 5m candle in this hour already closed inside range before sweep, cancel
