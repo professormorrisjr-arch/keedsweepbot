@@ -251,23 +251,36 @@ def get_updates(offset=None):
 
 def listen_for_commands():
     offset = None
-    print("Listening for /start and /scan...")
+    print("Listening for /start and /scan...", flush=True)
+    # Clear old stuck updates so old Render deploy stops stealing them
+    try:
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-1", timeout=10)
+    except:
+        pass
     while True:
-        updates = get_updates(offset)
-        for u in updates:
-            offset = u["update_id"] + 1
-            msg = u.get("message", {})
-            text = msg.get("text", "").lower().strip()
-            if text == "/start":
-                send_telegram("✅ KeedSweepBot ONLINE - 1H Sweep | 0:15 | TP1 50% / TP2 Opposite")
-            elif text == "/scan":
-                send_telegram("🔍 Scanning 12 pairs now...")
-                for name, symbol in PAIRS.items():
-                    try:
-                        check_pair(name, symbol)
-                    except Exception as e:
-                        print(f"Scan error {name}: {e}")
-                send_telegram("✅ Scan done. Waiting for next 0:15 setup.")
+        try:
+            updates = get_updates(offset)
+            if updates:
+                print(f"Got {len(updates)} updates", flush=True)
+            for u in updates:
+                offset = u["update_id"] + 1
+                msg = u.get("message", {})
+                text = msg.get("text", "").lower().strip()
+                # Handle /start@YourBotName too
+                if text.startswith("/start"):
+                    print("Got /start", flush=True)
+                    send_telegram("✅ KeedSweepBot ONLINE - 1H Sweep | 0:15 | TP1 50% / TP2 Opposite")
+                elif text.startswith("/scan"):
+                    print("Got /scan", flush=True)
+                    send_telegram("🔍 Scanning 12 pairs now...")
+                    for name, symbol in PAIRS.items():
+                        try:
+                            check_pair(name, symbol)
+                        except Exception as e:
+                            print(f"Scan error {name}: {e}", flush=True)
+                    send_telegram("✅ Scan done. Waiting for next 0:15 setup.")
+        except Exception as e:
+            print(f"Listen error: {e}", flush=True)
         time.sleep(3)
 
 if __name__ == "__main__":
