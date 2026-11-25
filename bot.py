@@ -238,6 +238,39 @@ def main_loop():
         else:
             print(f"Off session {datetime.now(SA_TZ).strftime('%H:%M')} - sleeping")
             time.sleep(300)
+# --- TELEGRAM COMMANDS: /start and /scan ---
+def get_updates(offset=None):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?timeout=5"
+        if offset:
+            url += f"&offset={offset}"
+        r = requests.get(url, timeout=10).json()
+        return r.get("result", [])
+    except:
+        return []
+
+def listen_for_commands():
+    offset = None
+    print("Listening for /start and /scan...")
+    while True:
+        updates = get_updates(offset)
+        for u in updates:
+            offset = u["update_id"] + 1
+            msg = u.get("message", {})
+            text = msg.get("text", "").lower().strip()
+            if text == "/start":
+                send_telegram("✅ KeedSweepBot ONLINE - 1H Sweep | 0:15 | TP1 50% / TP2 Opposite")
+            elif text == "/scan":
+                send_telegram("🔍 Scanning 12 pairs now...")
+                for name, symbol in PAIRS.items():
+                    try:
+                        check_pair(name, symbol)
+                    except Exception as e:
+                        print(f"Scan error {name}: {e}")
+                send_telegram("✅ Scan done. Waiting for next 0:15 setup.")
+        time.sleep(3)
 
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=listen_for_commands, daemon=True).start()
     main_loop()
