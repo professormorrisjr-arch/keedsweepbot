@@ -1,3 +1,20 @@
+# RENDER WEB FREE FIX - fake website so Render sees a port
+import os
+import threading
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "KeedSweepBot is alive"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web, daemon=True).start()
+# --- END FIX - your original bot code below ---
 import os
 import time
 import requests
