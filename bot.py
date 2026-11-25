@@ -113,13 +113,10 @@ def check_pair(name, symbol):
     if hour_key in last_signal_hour:
         return
 
-    # Current hour start (SA time)
-    hour_start_sa = now_sa.replace(minute=0, second=0, microsecond=0)
-    hour_start_utc = hour_start_sa.astimezone(timezone.utc).replace(tzinfo=None)
-    # 5Min candles of current hour only
-    curr_m5 = df5m[df5m["Time"] >= pd.Timestamp(hour_start_utc)]
-    if len(curr_m5) == 0:
-        return
+# Current hour start (SA time) -> convert to UTC to match Yahoo data
+hour_start_sa = now_sa.replace(minute=0, second=0, microsecond=0)
+hour_start_utc = hour_start_sa.astimezone(ZoneInfo("UTC"))
+df_now = df[df.index >= pd.Timestamp(hour_start_utc)]
 
     # --- 0:15 RULE ---
     # Only check if we are within first 15 mins of new hour
