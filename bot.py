@@ -120,7 +120,7 @@ df_now = df[df.index >= pd.Timestamp(hour_start_utc)]
 
     # --- 0:15 RULE ---
     # Only check if we are within first 15 mins of new hour
-    if now_sa.minute > 15:
+        if now_sa.minute > 15:
         return
 
     # --- RULE: No close inside before sweep ---
