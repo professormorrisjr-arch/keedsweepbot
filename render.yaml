@@ -1,9 +1,9 @@
 services:
-    - type: worker
+    - type: web
     name: keedsweepbot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: gunicorn bot:app --bind 0.0.0.0:$PORT
     envVars:
             - key: TELEGRAM_BOT_TOKEN
         sync: false
