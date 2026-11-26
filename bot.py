@@ -20,7 +20,7 @@ import time
 import random
 import requests
 from datetime import datetime, timezone
-import yfinance as yf
+import pandas as pd
 
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -78,24 +78,42 @@ def _f(x):
     except Exception:
         return float(str(x))
 
+# NEW: Direct Yahoo chart API - no yfinance, no crumb, no 429
 def get_data(symbol, interval, period):
-    # FIX: retry once if Yahoo rate-limits (429), with small backoff
+    # Map our intervals to Yahoo API
+    interval_map = {"1h": "60m", "5m": "5m", "1m": "1m"}
+    range_map = {"2d": "2d", "1d": "1d"}
+    y_interval = interval_map.get(interval, interval)
+    y_range = range_map.get(period, period)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    params = {"interval": y_interval, "range": y_range, "includePrePost": "false"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    }
     for attempt in range(2):
         try:
-            df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False, threads=False)
-            if df is None or len(df) < 5:
-                return None
-            try:
-                if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-                    df.columns = df.columns.get_level_values(0)
-            except Exception:
-                pass
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            if r.status_code == 429:
+                print(f"429 for {symbol}, waiting 10s")
+                time.sleep(10)
+                continue
+            data = r.json()
+            result = data["chart"]["result"][0]
+            timestamps = result["timestamp"]
+            quote = result["indicators"]["quote"][0]
+            df = pd.DataFrame({
+                "High": quote["high"],
+                "Low": quote["low"],
+                "Close": quote["close"],
+                "Open": quote["open"],
+                "Volume": quote["volume"],
+            }, index=pd.to_datetime(timestamps, unit="s", utc=True))
             df = df.dropna()
             if len(df) < 5:
                 return None
             return df
         except Exception as e:
-            print(f"yfinance retry {symbol} {interval}: {e}")
+            print(f"Yahoo direct retry {symbol} {interval}: {e}")
             time.sleep(3)
             continue
     return None
@@ -206,9 +224,7 @@ def main():
                 except Exception as e:
                     print(f"Error {pair}: {e}")
                     continue
-                # FIX: small pause between pairs so Yahoo doesn't see us as spam
                 time.sleep(2 + random.uniform(0, 1))
-            # FIX: check every 90s instead of 60s - less load, still fast enough for 1M/5M
             time.sleep(90)
         except Exception as e:
             print(f"Loop error: {e}")
