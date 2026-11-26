@@ -50,22 +50,30 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
+# FIX: correct decimals per pair - so NZDUSD doesn't show 0.55 for everything
+def fmt(pair, price):
+    if pair in ["GBPUSD", "EURUSD", "AUDUSD", "NZDUSD", "USDCAD"]:
+        return f"{price:.5f}"
+    if pair in ["GBPJPY", "EURJPY", "USDJPY"]:
+        return f"{price:.3f}"
+    # XAUUSD, US30, NAS100, BTCUSD
+    return f"{price:.2f}"
+
 def format_signal(pair, sig):
     return (
         f"📊 {sig['type']} {pair}\n"
         f"🕯️ {sig['strategy']}\n"
-        f"🎯 Entry: {sig['entry']:.2f}\n"
-        f"🛑 SL: {sig['sl']:.2f}\n"
-        f"✅ TP1: {sig['tp1']:.2f} (Mid)\n"
-        f"✅ TP2: {sig['tp2']:.2f} (Opposite Line)\n"
-        f"📌 Prev High: {sig['prev_high']:.2f} | Low: {sig['prev_low']:.2f}\n"
+        f"🎯 Entry: {fmt(pair, sig['entry'])}\n"
+        f"🛑 SL: {fmt(pair, sig['sl'])}\n"
+        f"✅ TP1: {fmt(pair, sig['tp1'])} (Mid)\n"
+        f"✅ TP2: {fmt(pair, sig['tp2'])} (Opposite Line)\n"
+        f"📌 Prev High: {fmt(pair, sig['prev_high'])} | Low: {fmt(pair, sig['prev_low'])}\n"
         f"🕒 Time: {datetime.now(timezone.utc).strftime('%H:%M')} UTC"
     )
 
 # FIX FOR YFINANCE SERIES ERROR - safe float
 def _f(x):
     try:
-        # If yfinance gives a Series (new version), take first value
         if hasattr(x, "iloc"):
             return float(x.iloc[0])
         return float(x)
@@ -76,7 +84,6 @@ def get_data(symbol, interval, period):
     df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
     if df is None or len(df) < 5:
         return None
-    # FIX: yfinance now returns MultiIndex columns like ('High','BTCUSD') - flatten them
     try:
         if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
             df.columns = df.columns.get_level_values(0)
@@ -130,7 +137,6 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     if len(bottoms) >= 2:
         neckline = max([_f(x) for x in recent['High']])
         if close > neckline:
-            # FIX ONLY: skip if TP1 already gone - entry must be BELOW Mid
             if close >= mid:
                 return None
             sl = min(bottoms) - rng * 0.05
@@ -146,7 +152,6 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     if len(tops) >= 2:
         neckline = min([_f(x) for x in recent['Low']])
         if close < neckline:
-            # FIX ONLY: skip if TP1 already gone - entry must be ABOVE Mid
             if close <= mid:
                 return None
             sl = max(tops) + rng * 0.05
