@@ -62,9 +62,28 @@ def format_signal(pair, sig):
         f"🕒 Time: {datetime.now(timezone.utc).strftime('%H:%M')} UTC"
     )
 
+# FIX FOR YFINANCE SERIES ERROR - safe float
+def _f(x):
+    try:
+        # If yfinance gives a Series (new version), take first value
+        if hasattr(x, "iloc"):
+            return float(x.iloc[0])
+        return float(x)
+    except Exception:
+        return float(str(x))
+
 def get_data(symbol, interval, period):
-    df = yf.download(symbol, period=period, interval=interval, progress=False)
+    df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
     if df is None or len(df) < 5:
+        return None
+    # FIX: yfinance now returns MultiIndex columns like ('High','BTCUSD') - flatten them
+    try:
+        if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+            df.columns = df.columns.get_level_values(0)
+    except Exception:
+        pass
+    df = df.dropna()
+    if len(df) < 5:
         return None
     return df
 
@@ -73,9 +92,9 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
     recent = df_5m.iloc[-4:-1]
     mid = (prev_high + prev_low) / 2
     for _, c in recent.iterrows():
-        high = float(c['High'])
-        low = float(c['Low'])
-        close = float(c['Close'])
+        high = _f(c['High'])
+        low = _f(c['Low'])
+        close = _f(c['Close'])
         if high > prev_high and close < prev_high:
             return {
                 'type': 'SELL', 'strategy': 'STRATEGY 1 - Sweep High',
@@ -102,14 +121,14 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     recent = df_closed.iloc[-60:]
     if len(recent) < 10:
         return None
-    close = float(df_closed.iloc[-1]['Close'])
-    lows = [float(x) for x in recent['Low']]
-    highs = [float(x) for x in recent['High']]
+    close = _f(df_closed.iloc[-1]['Close'])
+    lows = [_f(x) for x in recent['Low']]
+    highs = [_f(x) for x in recent['High']]
 
     # DOUBLE BOTTOM - BUY AT PREV LOW
     bottoms = [l for l in lows if abs(l - prev_low) <= rng * 0.15]
     if len(bottoms) >= 2:
-        neckline = max([float(x) for x in recent['High']])
+        neckline = max([_f(x) for x in recent['High']])
         if close > neckline:
             # FIX ONLY: skip if TP1 already gone - entry must be BELOW Mid
             if close >= mid:
@@ -125,7 +144,7 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     # DOUBLE TOP - SELL AT PREV HIGH
     tops = [h for h in highs if abs(h - prev_high) <= rng * 0.15]
     if len(tops) >= 2:
-        neckline = min([float(x) for x in recent['Low']])
+        neckline = min([_f(x) for x in recent['Low']])
         if close < neckline:
             # FIX ONLY: skip if TP1 already gone - entry must be ABOVE Mid
             if close <= mid:
@@ -151,8 +170,8 @@ def main():
                     if df_1h is None:
                         continue
                     prev = df_1h.iloc[-2]
-                    prev_high = float(prev['High'])
-                    prev_low = float(prev['Low'])
+                    prev_high = _f(prev['High'])
+                    prev_low = _f(prev['Low'])
                     sig = None
 
                     if 0 <= now.minute <= 15:
