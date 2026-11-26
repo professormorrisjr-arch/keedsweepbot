@@ -17,6 +17,7 @@ threading.Thread(target=run_web, daemon=True).start()
 # --- END WEB FIX - your bot code below ---
 
 import time
+import random
 import requests
 from datetime import datetime, timezone
 import yfinance as yf
@@ -50,13 +51,11 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
-# FIX: correct decimals per pair - so NZDUSD doesn't show 0.55 for everything
 def fmt(pair, price):
     if pair in ["GBPUSD", "EURUSD", "AUDUSD", "NZDUSD", "USDCAD"]:
         return f"{price:.5f}"
     if pair in ["GBPJPY", "EURJPY", "USDJPY"]:
         return f"{price:.3f}"
-    # XAUUSD, US30, NAS100, BTCUSD
     return f"{price:.2f}"
 
 def format_signal(pair, sig):
@@ -71,7 +70,6 @@ def format_signal(pair, sig):
         f"🕒 Time: {datetime.now(timezone.utc).strftime('%H:%M')} UTC"
     )
 
-# FIX FOR YFINANCE SERIES ERROR - safe float
 def _f(x):
     try:
         if hasattr(x, "iloc"):
@@ -81,20 +79,28 @@ def _f(x):
         return float(str(x))
 
 def get_data(symbol, interval, period):
-    df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False)
-    if df is None or len(df) < 5:
-        return None
-    try:
-        if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-            df.columns = df.columns.get_level_values(0)
-    except Exception:
-        pass
-    df = df.dropna()
-    if len(df) < 5:
-        return None
-    return df
+    # FIX: retry once if Yahoo rate-limits (429), with small backoff
+    for attempt in range(2):
+        try:
+            df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=False, threads=False)
+            if df is None or len(df) < 5:
+                return None
+            try:
+                if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+                    df.columns = df.columns.get_level_values(0)
+            except Exception:
+                pass
+            df = df.dropna()
+            if len(df) < 5:
+                return None
+            return df
+        except Exception as e:
+            print(f"yfinance retry {symbol} {interval}: {e}")
+            time.sleep(3)
+            continue
+    return None
 
-# ============ STRATEGY 1: 1H Levels + 5M Confirmation ============
+# ============ STRATEGY 1 ============
 def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
     recent = df_5m.iloc[-4:-1]
     mid = (prev_high + prev_low) / 2
@@ -103,6 +109,8 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
         low = _f(c['Low'])
         close = _f(c['Close'])
         if high > prev_high and close < prev_high:
+            if close <= mid:
+                continue
             return {
                 'type': 'SELL', 'strategy': 'STRATEGY 1 - Sweep High',
                 'entry': close, 'sl': high,
@@ -110,6 +118,8 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
                 'prev_high': prev_high, 'prev_low': prev_low
             }
         if low < prev_low and close > prev_low:
+            if close >= mid:
+                continue
             return {
                 'type': 'BUY', 'strategy': 'STRATEGY 1 - Sweep Low',
                 'entry': close, 'sl': low,
@@ -118,7 +128,7 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
             }
     return None
 
-# ============ STRATEGY 2: 1H Levels + 1M Confirmation ============
+# ============ STRATEGY 2 ============
 def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     mid = (prev_high + prev_low) / 2
     rng = prev_high - prev_low
@@ -132,7 +142,6 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     lows = [_f(x) for x in recent['Low']]
     highs = [_f(x) for x in recent['High']]
 
-    # DOUBLE BOTTOM - BUY AT PREV LOW
     bottoms = [l for l in lows if abs(l - prev_low) <= rng * 0.15]
     if len(bottoms) >= 2:
         neckline = max([_f(x) for x in recent['High']])
@@ -147,7 +156,6 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
                 'prev_high': prev_high, 'prev_low': prev_low
             }
 
-    # DOUBLE TOP - SELL AT PREV HIGH
     tops = [h for h in highs if abs(h - prev_high) <= rng * 0.15]
     if len(tops) >= 2:
         neckline = min([_f(x) for x in recent['Low']])
@@ -198,10 +206,13 @@ def main():
                 except Exception as e:
                     print(f"Error {pair}: {e}")
                     continue
-            time.sleep(60)
+                # FIX: small pause between pairs so Yahoo doesn't see us as spam
+                time.sleep(2 + random.uniform(0, 1))
+            # FIX: check every 90s instead of 60s - less load, still fast enough for 1M/5M
+            time.sleep(90)
         except Exception as e:
             print(f"Loop error: {e}")
-            time.sleep(60)
+            time.sleep(90)
 
 if __name__ == "__main__":
     main()
