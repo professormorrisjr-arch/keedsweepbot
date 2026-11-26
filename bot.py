@@ -20,9 +20,8 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 print(f"TOKEN set: {bool(TOKEN)} CHAT_ID set: {bool(CHAT_ID)}", flush=True)
 
-BROKER_TZ = ZoneInfo("Europe/Athens")  # = SAST / MT5 Broker Time - LOCKED
+BROKER_TZ = ZoneInfo("Europe/Athens")
 
-# 12 PAIRS - LOCKED
 PAIRS = {
     "GBPUSD": "GBPUSD=X", "GBPJPY": "GBPJPY=X", "EURUSD": "EURUSD=X",
     "XAUUSD": "GC=F", "US30": "^DJI", "NAS100": "^IXIC",
@@ -30,13 +29,11 @@ PAIRS = {
     "AUDUSD": "AUDUSD=X", "NZDUSD": "NZDUSD=X", "EURJPY": "EURJPY=X",
 }
 
-# PIP SIZE - for pips calc + filters
 PIP_SIZE = {
     "GBPUSD": 0.0001, "EURUSD": 0.0001, "AUDUSD": 0.0001, "NZDUSD": 0.0001,
     "USDCAD": 0.0001, "GBPJPY": 0.01, "USDJPY": 0.01, "EURJPY": 0.01,
     "XAUUSD": 0.1, "US30": 1.0, "NAS100": 1.0, "BTCUSD": 1.0,
 }
-# MIN PREV H1 RANGE - kills dead-market spam like 0.9 pip / 2.4 pip H1
 MIN_RANGE_PIPS = {
     "GBPUSD": 8, "EURUSD": 8, "AUDUSD": 8, "NZDUSD": 8, "USDCAD": 8,
     "GBPJPY": 10, "USDJPY": 10, "EURJPY": 10,
@@ -97,7 +94,7 @@ def get_just_closed_h1(df5):
     if df5 is None or df5.empty: return None
     df = df5.set_index("t_broker").resample("1h").agg({"o":"first","h":"max","l":"min","c":"last"}).dropna()
     if len(df) < 2: return None
-    row = df.iloc[-2]  # Just-Closed H1
+    row = df.iloc[-2]
     return {"high": float(row["h"]), "low": float(row["l"]), "close": float(row["c"]), "time": df.index[-2]}
 
 def check_range_ok(sym, prev_high, prev_low):
@@ -107,44 +104,35 @@ def check_range_ok(sym, prev_high, prev_low):
 def check_sl_ok(sym, entry, sl):
     return to_pips(entry - sl, sym) >= MIN_SL_PIPS
 
-# STRATEGY 1 - 5M, 0-20min, Sweep + Close Inside, If ANY 5M closes OUTSIDE = NO SIGNAL
 def check_s1(sym, df5, prev):
     if prev is None: return None
     ok, rng = check_range_ok(sym, prev["high"], prev["low"])
-    if not ok: return None  # Range too small - dead market
+    if not ok: return None
     ph, pl, mid = prev["high"], prev["low"], (prev["high"]+prev["low"])/2
-    # Get 5M candles of current Broker hour, only :05 :10 :15 :20
     now_b = datetime.now(BROKER_TZ)
     hour_start = now_b.replace(minute=0, second=0, microsecond=0)
     df = df5[df5["t_broker"] >= hour_start].copy()
     if df.empty: return None
-    # Must have at least one closed 5M candle in this hour
     for _, row in df.iterrows():
         c = float(row["c"]); h = float(row["h"]); l = float(row["l"])
-        # RULE: If ANY 5M candle closes OUTSIDE Prev H1 range = NO SIGNAL
         if c > ph or c < pl:
             return None
-        # SELL: Sweep High + Close Inside
         if h > ph and c < ph and c > pl:
             entry = c; sl = float(row["h"]); tp1 = mid; tp2 = pl
-            # FIX: TP must be in profit, Entry must NOT already be past Mid
             if entry <= mid: return None
             if not check_sl_ok(sym, entry, sl): return None
             if to_pips(tp1 - entry, sym) < 1: return None
             return ("STRATEGY 1", "SELL 🔴", entry, sl, tp1, tp2, row["t_broker"])
-        # BUY: Sweep Low + Close Inside
         if l < pl and c > pl and c < ph:
             entry = c; sl = float(row["l"]); tp1 = mid; tp2 = ph
             if entry >= mid: return None
             if not check_sl_ok(sym, entry, sl): return None
             if to_pips(tp1 - entry, sym) < 1: return None
             return ("STRATEGY 1", "BUY 🟢", entry, sl, tp1, tp2, row["t_broker"])
-        # Only check first valid sweep candle in 0-20min window
         if row["t_broker"].minute > 20:
             break
     return None
 
-# STRATEGY 2 - 1M, Equal Highs/Lows + CHOCH / Neckline Break
 def check_s2(sym, df1, prev):
     if prev is None: return None
     ok, rng = check_range_ok(sym, prev["high"], prev["low"])
@@ -153,23 +141,19 @@ def check_s2(sym, df1, prev):
     if df1 is None or len(df1) < 30: return None
     df = df1.tail(60).reset_index(drop=True)
     highs = df["h"].values; lows = df["l"].values; closes = df["c"].values
-    # DOUBLE TOP: 2x Equal Highs near Prev H1 High -> valley = neckline -> close BELOW neckline
     for i in range(5, len(df)-5):
         for j in range(i+3, len(df)-2):
             p1, p2 = float(highs[i]), float(highs[j])
             if abs(p1 - p2) <= (ph - pl) * 0.10 and p1 >= ph - (ph-pl)*0.15 and p2 >= ph - (ph-pl)*0.15:
                 valley = float(min(lows[i:j+1]))
-                # CHOCH: close below neckline
                 for k in range(j+1, len(df)):
                     if float(closes[k]) < valley:
                         entry = float(closes[k]); sl = max(p1, p2); tp1 = mid; tp2 = pl
-                        # FIX: Entry must be ABOVE Mid for SELL, TP must be in profit
                         if entry <= mid: return None
                         if not check_sl_ok(sym, entry, sl): return None
                         if to_pips(tp1 - entry, sym) < 1: return None
                         return ("STRATEGY 2", "SELL 🔴", entry, sl, tp1, tp2, df.iloc[k]["t_broker"])
                 break
-    # DOUBLE BOTTOM: 2x Equal Lows near Prev H1 Low -> peak = neckline -> close ABOVE neckline
     for i in range(5, len(df)-5):
         for j in range(i+3, len(df)-2):
             p1, p2 = float(lows[i]), float(lows[j])
@@ -198,7 +182,6 @@ def bot_loop():
                     prev = get_just_closed_h1(df5)
                     if prev is None: continue
                     key_base = f"{sym}_{prev['time']}"
-                    # S1
                     s1 = check_s1(sym, df5, prev)
                     if s1:
                         key = key_base + "_S1_" + s1[1]
@@ -206,7 +189,6 @@ def bot_loop():
                             sent[key] = True
                             _, direction, entry, sl, tp1, tp2, ct = s1
                             send(format_signal(sym, "STRATEGY 1", direction, entry, sl, tp1, tp2, prev["high"], prev["low"], ct.strftime("%H:%M")))
-                    # S2 - 1M
                     df1 = get_data(ticker, "1m", period="1d")
                     s2 = check_s2(sym, df1, prev)
                     if s2:
@@ -223,4 +205,5 @@ def bot_loop():
 
 threading.Thread(target=bot_loop, daemon=True).start()
 if __name__ == "__main__":
-    run_flask()
+    while True:
+        time.sleep(3600)
