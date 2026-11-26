@@ -54,22 +54,13 @@ def get_data(symbol, interval, period):
 # ============ STRATEGY 1: 1H Levels + 5M Confirmation ============
 # Time: XX:00 - XX:15 only
 # 5M wick past Prev High/Low + 5M close back inside = Signal
-def check_strategy_1(prev_high, prev_low):
-    now = datetime.now(timezone.utc)
-    if not (0 <= now.minute <= 15):
-        return None
-    return "RUN"  # tells main loop to fetch 5M
-
 def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
-    # Last 3 x 5M candles = last 15 min
     recent = df_5m.iloc[-3:]
     mid = (prev_high + prev_low) / 2
-
     for _, c in recent.iterrows():
         high = float(c['High'])
         low = float(c['Low'])
         close = float(c['Close'])
-
         # SELL: 5M wick ABOVE Prev High + 5M close BELOW Prev High
         if high > prev_high and close < prev_high:
             return {
@@ -96,18 +87,14 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     rng = prev_high - prev_low
     if rng == 0:
         return None
-
-    # Last 60 x 1M candles = last 1 hour for pattern
     recent = df_1m.iloc[-60:]
     if len(recent) < 10:
         return None
-
     close = float(df_1m.iloc[-1]['Close'])
     lows = [float(x) for x in recent['Low']]
     highs = [float(x) for x in recent['High']]
 
     # DOUBLE BOTTOM - BUY AT PREV LOW
-    # Two 1M lows near Prev Low
     bottoms = [l for l in lows if abs(l - prev_low) <= rng * 0.15]
     if len(bottoms) >= 2:
         neckline = max([float(x) for x in recent['High']])
@@ -121,7 +108,6 @@ def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
             }
 
     # DOUBLE TOP - SELL AT PREV HIGH
-    # Two 1M highs near Prev High
     tops = [h for h in highs if abs(h - prev_high) <= rng * 0.15]
     if len(tops) >= 2:
         neckline = min([float(x) for x in recent['Low']])
@@ -141,7 +127,6 @@ def main():
         try:
             now = datetime.now(timezone.utc)
             hour_key = now.strftime("%Y-%m-%d-%H")
-
             for pair, symbol in PAIRS.items():
                 try:
                     # 1H LEVELS - candle that just closed
@@ -151,7 +136,6 @@ def main():
                     prev = df_1h.iloc[-2]
                     prev_high = float(prev['High'])
                     prev_low = float(prev['Low'])
-
                     sig = None
 
                     # STRATEGY 1 FIRST (00-15 min, 5M confirmation)
@@ -172,11 +156,9 @@ def main():
                             sent_signals.add(key)
                             send_telegram(format_signal(pair, sig))
                             print(f"SENT: {pair} {sig['type']} {sig['strategy']}")
-
                 except Exception as e:
                     print(f"Error {pair}: {e}")
                     continue
-
             time.sleep(60)
         except Exception as e:
             print(f"Loop error: {e}")
