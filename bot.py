@@ -53,15 +53,18 @@ def get_data(symbol, interval, period):
 
 # ============ STRATEGY 1: 1H Levels + 5M Confirmation ============
 # Time: XX:00 - XX:15 only
-# 5M wick past Prev High/Low + 5M close back inside = Signal
+# RULE: 5M candle must SWEEP past Prev High/Low AND CLOSE back inside range
+# FIXED: Ignore live forming candle, only use fully closed candles
 def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
-    recent = df_5m.iloc[-3:]
+    # EXCLUDE last candle - it's still forming, not closed yet
+    # Only check last 3 FULLY CLOSED 5M candles
+    recent = df_5m.iloc[-4:-1]
     mid = (prev_high + prev_low) / 2
     for _, c in recent.iterrows():
         high = float(c['High'])
         low = float(c['Low'])
         close = float(c['Close'])
-        # SELL: 5M wick ABOVE Prev High + 5M close BELOW Prev High
+        # SELL: 5M wick ABOVE Prev High + SAME 5M candle CLOSED BELOW Prev High
         if high > prev_high and close < prev_high:
             return {
                 'type': 'SELL', 'strategy': 'STRATEGY 1 - Sweep High',
@@ -69,7 +72,7 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
                 'tp1': mid, 'tp2': prev_low,
                 'prev_high': prev_high, 'prev_low': prev_low
             }
-        # BUY: 5M wick BELOW Prev Low + 5M close ABOVE Prev Low
+        # BUY: 5M wick BELOW Prev Low + SAME 5M candle CLOSED ABOVE Prev Low
         if low < prev_low and close > prev_low:
             return {
                 'type': 'BUY', 'strategy': 'STRATEGY 1 - Sweep Low',
@@ -82,15 +85,18 @@ def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
 # ============ STRATEGY 2: 1H Levels + 1M Confirmation ============
 # Time: XX:00 - XX:59
 # 1M Double Top/Bottom near Prev High/Low + 1M neckline break = Signal
+# FIXED: Ignore live forming 1M candle
 def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
     mid = (prev_high + prev_low) / 2
     rng = prev_high - prev_low
     if rng == 0:
         return None
-    recent = df_1m.iloc[-60:]
+    # EXCLUDE last 1M candle - still forming
+    df_closed = df_1m.iloc[:-1]
+    recent = df_closed.iloc[-60:]
     if len(recent) < 10:
         return None
-    close = float(df_1m.iloc[-1]['Close'])
+    close = float(df_closed.iloc[-1]['Close'])
     lows = [float(x) for x in recent['Low']]
     highs = [float(x) for x in recent['High']]
 
