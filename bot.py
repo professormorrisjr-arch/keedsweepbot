@@ -1,22 +1,38 @@
-import os, time, threading
-from datetime import datetime, timezone, timedelta
-import yfinance as yf
-import requests
-import pandas as pd
+# RENDER WEB SERVICE FIX - fake website so Render sees a port
+import os
+import threading
 from flask import Flask
 
-# ================= CONFIG =================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-CHAT_ID = os.getenv("CHAT_ID", "")
+app = Flask(__name__)
 
-# 12 Pairs - Locked, never change
+@app.route('/')
+def home():
+    return "KeedSweepBot is alive"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web, daemon=True).start()
+# --- END WEB FIX - your bot code below ---
+
+import time
+import requests
+from datetime import datetime, timezone
+import yfinance as yf
+
+# --- CONFIG ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# LOCKED 12 PAIRS - DO NOT CHANGE
 PAIRS = {
     "GBPUSD": "GBPUSD=X",
     "GBPJPY": "GBPJPY=X",
     "EURUSD": "EURUSD=X",
     "XAUUSD": "GC=F",
     "US30": "^DJI",
-    "NAS100": "^NDX",
+    "NAS100": "^IXIC",
     "USDJPY": "USDJPY=X",
     "USDCAD": "USDCAD=X",
     "BTCUSD": "BTC-USD",
@@ -25,216 +41,142 @@ PAIRS = {
     "EURJPY": "EURJPY=X",
 }
 
-# ================= KEEP ALIVE =================
-app = Flask(__name__)
-@app.route("/")
-def home():
-    return "KeedSweepBot LIVE - 24/7"
+sent_signals = set()
 
-def keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
-    print(f"Keep alive on {port}", flush=True)
-
-# ================= TELEGRAM =================
 def send_telegram(msg):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-        print(f"Telegram sent: {msg[:60]}", flush=True)
-    except Exception as e:
-        print(f"Telegram error: {e}", flush=True)
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram not configured")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
-# ================= DATA =================
-def get_df(ticker, period, interval):
-    try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False)
-        if df is None or len(df) < 5:
-            return None
-        try:
-            df.columns = df.columns.get_level_values(0)
-        except:
-            pass
-        return df
-    except Exception as e:
-        print(f"Data error {ticker} {interval}: {e}", flush=True)
+def format_signal(pair, sig):
+    return (
+        f"📊 {sig['type']} {pair}\n"
+        f"🕯️ {sig['strategy']}\n"
+        f"🎯 Entry: {sig['entry']:.2f}\n"
+        f"🛑 SL: {sig['sl']:.2f}\n"
+        f"✅ TP1: {sig['tp1']:.2f} (Mid)\n"
+        f"✅ TP2: {sig['tp2']:.2f} (Opposite Line)\n"
+        f"📌 Prev High: {sig['prev_high']:.2f} | Low: {sig['prev_low']:.2f}\n"
+        f"🕒 Time: {datetime.now(timezone.utc).strftime('%H:%M')} UTC"
+    )
+
+def get_data(symbol, interval, period):
+    df = yf.download(symbol, period=period, interval=interval, progress=False)
+    if df is None or len(df) < 5:
         return None
+    return df
 
-def fmt(p, pair):
-    # JPY / Indices / BTC need fewer decimals
-    if "JPY" in pair or pair in ["US30", "NAS100"]:
-        return round(float(p), 2)
-    if pair == "BTCUSD":
-        return round(float(p), 1)
-    if pair == "XAUUSD":
-        return round(float(p), 2)
-    return round(float(p), 5)
-
-# ================= STATE =================
-# Prevents 2 signals same pair + same hour + same strategy
-sent = set()  # (pair, hour_key, strategy)
-# Locked H/L per pair per hour
-locked_range = {}  # pair -> (hour_key, H, L)
-
-def get_range(pair, ticker, hour_key):
-    # If already locked this hour, return it - NEVER change mid-hour
-    if pair in locked_range and locked_range[pair][0] == hour_key:
-        return locked_range[pair][1], locked_range[pair][2]
-
-    df1h = get_df(ticker, "2d", "1h")
-    if df1h is None:
-        return None, None
-    # Previous 1H candle that just closed = [-1] if we are in new hour, [-2] if data lags
-    # We use the last COMPLETED candle: the one before current forming hour
-    # At XX:05, last closed is the XX:00 candle's previous. yfinance 1h last row is often the just-closed one.
-    # So we take [-2] as the completed range candle to be safe, unless [-1] is fully closed.
-    # Simplest reliable: [-2] is definitely closed.
-    prev = df1h.iloc[-2]
-    H = float(prev["High"]); L = float(prev["Low"])
-    locked_range[pair] = (hour_key, H, L)
-    print(f"{pair} New Range locked {hour_key} H={H} L={L}", flush=True)
-    return H, L
-
-# ================= STRATEGY 1 =================
-def check_strategy1(pair, ticker, H, L, hour_key):
-    # Only 00:00 - 00:15
-    now = datetime.now(timezone.utc)
-    if now.minute >= 15:
-        return None
-    if (pair, hour_key, "S1") in sent:
-        return None
-
-    df5 = get_df(ticker, "1d", "5m")
-    if df5 is None:
-        return None
-
-    # Only the 3 x 5M candles of THIS hour, that are fully closed
-    # Candle 1: :00-:05, Candle 2: :05-:10, Candle 3: :10-:15
-    for idx, row in df5.iterrows():
-        # idx is UTC time of candle open
-        if idx.hour != now.hour or idx.date() != now.date():
-            continue
-        if idx.minute not in [0, 5, 10]:
-            continue
-        # Must be fully closed: candle end < now
-        candle_end = idx + timedelta(minutes=5)
-        if candle_end.tz_localize(None) > now.replace(tzinfo=None):
-            continue  # still forming, NEVER use
-
-        low = float(row["Low"]); high = float(row["High"]); close = float(row["Close"])
-
-        # BUY: wick BELOW L, close back ABOVE L (inside)
-        if low < L and close > L and close < H:
-            return {"pair": pair, "strategy": "STRATEGY 1 - Sweep Low", "dir": "BUY 🟢",
-                    "entry": close, "sl": low, "tp1": (H+L)/2, "tp2": H, "H": H, "L": L}
-        # SELL: wick ABOVE H, close back BELOW H (inside)
-        if high > H and close < H and close > L:
-            return {"pair": pair, "strategy": "STRATEGY 1 - Sweep High", "dir": "SELL 🔴",
-                    "entry": close, "sl": high, "tp1": (H+L)/2, "tp2": L, "H": H, "L": L}
+# ============ STRATEGY 1: 1H Levels + 5M Confirmation ============
+def check_strategy_1_with_5m(df_5m, prev_high, prev_low):
+    recent = df_5m.iloc[-4:-1]
+    mid = (prev_high + prev_low) / 2
+    for _, c in recent.iterrows():
+        high = float(c['High'])
+        low = float(c['Low'])
+        close = float(c['Close'])
+        if high > prev_high and close < prev_high:
+            return {
+                'type': 'SELL', 'strategy': 'STRATEGY 1 - Sweep High',
+                'entry': close, 'sl': high,
+                'tp1': mid, 'tp2': prev_low,
+                'prev_high': prev_high, 'prev_low': prev_low
+            }
+        if low < prev_low and close > prev_low:
+            return {
+                'type': 'BUY', 'strategy': 'STRATEGY 1 - Sweep Low',
+                'entry': close, 'sl': low,
+                'tp1': mid, 'tp2': prev_high,
+                'prev_high': prev_high, 'prev_low': prev_low
+            }
     return None
 
-# ================= STRATEGY 2 =================
-def check_strategy2(pair, ticker, H, L, hour_key):
-    # Only if Strategy 1 did NOT give signal this hour
-    if (pair, hour_key, "S1") in sent:
+# ============ STRATEGY 2: 1H Levels + 1M Confirmation ============
+def check_strategy_2_with_1m(df_1m, prev_high, prev_low):
+    mid = (prev_high + prev_low) / 2
+    rng = prev_high - prev_low
+    if rng == 0:
         return None
-    if (pair, hour_key, "S2") in sent:
+    df_closed = df_1m.iloc[:-1]
+    recent = df_closed.iloc[-60:]
+    if len(recent) < 10:
         return None
+    close = float(df_closed.iloc[-1]['Close'])
+    lows = [float(x) for x in recent['Low']]
+    highs = [float(x) for x in recent['High']]
 
-    df1 = get_df(ticker, "1d", "1m")
-    if df1 is None or len(df1) < 20:
-        return None
+    # DOUBLE BOTTOM - BUY AT PREV LOW
+    bottoms = [l for l in lows if abs(l - prev_low) <= rng * 0.15]
+    if len(bottoms) >= 2:
+        neckline = max([float(x) for x in recent['High']])
+        if close > neckline:
+            # FIX ONLY: skip if TP1 already gone - entry must be BELOW Mid
+            if close >= mid:
+                return None
+            sl = min(bottoms) - rng * 0.05
+            return {
+                'type': 'BUY', 'strategy': 'STRATEGY 2 - Double Bottom',
+                'entry': close, 'sl': sl,
+                'tp1': mid, 'tp2': prev_high,
+                'prev_high': prev_high, 'prev_low': prev_low
+            }
 
-    now = datetime.now(timezone.utc)
-    # Only 1M candles of THIS hour, fully closed
-    hour_df = df1[df1.index.hour == now.hour]
-    hour_df = hour_df[hour_df.index.date == now.date()]
-    if len(hour_df) < 10:
-        return None
-
-    tol = (H - L) * 0.15  # tap must be within 15% of range height from H/L
-
-    # --- Double Bottom -> BUY ---
-    # Find 2 lows near L
-    lows = hour_df[hour_df["Low"] <= L + tol]
-    if len(lows) >= 2:
-        first = lows.iloc[0]; second = lows.iloc[-1]
-        if second.name > first.name:  # second after first
-            # Neckline = highest High between the two bottoms
-            between = hour_df[(hour_df.index > first.name) & (hour_df.index < second.name)]
-            if len(between) > 0:
-                neck = float(between["High"].max())
-                last = hour_df.iloc[-2]  # last CLOSED 1M candle
-                last_close = float(last["Close"])
-                if last_close > neck:  # break above neckline, closed
-                    sl = float(lows["Low"].min())
-                    return {"pair": pair, "strategy": "STRATEGY 2 - Double Bottom", "dir": "BUY 🟢",
-                            "entry": last_close, "sl": sl, "tp1": (H+L)/2, "tp2": H, "H": H, "L": L}
-
-    # --- Double Top -> SELL ---
-    highs = hour_df[hour_df["High"] >= H - tol]
-    if len(highs) >= 2:
-        first = highs.iloc[0]; second = highs.iloc[-1]
-        if second.name > first.name:
-            between = hour_df[(hour_df.index > first.name) & (hour_df.index < second.name)]
-            if len(between) > 0:
-                neck = float(between["Low"].min())
-                last = hour_df.iloc[-2]
-                last_close = float(last["Close"])
-                if last_close < neck:  # break below neckline, closed
-                    sl = float(highs["High"].max())
-                    return {"pair": pair, "strategy": "STRATEGY 2 - Double Top", "dir": "SELL 🔴",
-                            "entry": last_close, "sl": sl, "tp1": (H+L)/2, "tp2": L, "H": H, "L": L}
+    # DOUBLE TOP - SELL AT PREV HIGH
+    tops = [h for h in highs if abs(h - prev_high) <= rng * 0.15]
+    if len(tops) >= 2:
+        neckline = min([float(x) for x in recent['Low']])
+        if close < neckline:
+            # FIX ONLY: skip if TP1 already gone - entry must be ABOVE Mid
+            if close <= mid:
+                return None
+            sl = max(tops) + rng * 0.05
+            return {
+                'type': 'SELL', 'strategy': 'STRATEGY 2 - Double Top',
+                'entry': close, 'sl': sl,
+                'tp1': mid, 'tp2': prev_low,
+                'prev_high': prev_high, 'prev_low': prev_low
+            }
     return None
 
-# ================= SCAN =================
-def scan_all(hour_key):
-    for pair, ticker in PAIRS.items():
-        try:
-            H, L = get_range(pair, ticker, hour_key)
-            if H is None:
-                continue
-
-            # Try Strategy 1 first (00-15)
-            res = check_strategy1(pair, ticker, H, L, hour_key)
-            strat_key = "S1"
-            if res is None:
-                # Strategy 2 backup (00-59) if S1 missed
-                res = check_strategy2(pair, ticker, H, L, hour_key)
-                strat_key = "S2"
-
-            if res:
-                sent.add((pair, hour_key, strat_key))
-                msg = (
-                    f"{res['dir'].split()[0]} *{pair}*\n"
-                    f"{res['strategy']}\n"
-                    f"Entry: {fmt(res['entry'], pair)}\n"
-                    f"SL: {fmt(res['sl'], pair)}\n"
-                    f"TP1: {fmt(res['tp1'], pair)} (Mid)\n"
-                    f"TP2: {fmt(res['tp2'], pair)} (Opposite Line)\n"
-                    f"Prev High: {fmt(res['H'], pair)} | Low: {fmt(res['L'], pair)}"
-                )
-                send_telegram(msg)
-                print(f"SIGNAL {pair} {res['strategy']} {res['dir']}", flush=True)
-            else:
-                print(f"No setup: {pair} H={fmt(H,pair)} L={fmt(L,pair)}", flush=True)
-        except Exception as e:
-            print(f"Error {pair}: {e}", flush=True)
-
-# ================= MAIN =================
 def main():
-    keep_alive()
-    send_telegram("✅ *KeedSweepBot LIVE - 24/7*\n12 Pairs | 1H Range | S1: 5M Sweep 00-15 | S2: 1M Double Top/Bottom\nTP1 Mid | TP2 Opposite | No Sessions")
-    print("Bot started 24/7", flush=True)
+    send_telegram("✅ KeedSweepBot v3 LIVE - Locked 12 Pairs | 1H Levels | 5M S1 | 1M S2")
     while True:
         try:
             now = datetime.now(timezone.utc)
             hour_key = now.strftime("%Y-%m-%d-%H")
-            print(f"--- Scan {hour_key} {now.strftime('%H:%M')} UTC ---", flush=True)
-            scan_all(hour_key)
-            time.sleep(60)  # Check every minute
+            for pair, symbol in PAIRS.items():
+                try:
+                    df_1h = get_data(symbol, "1h", "2d")
+                    if df_1h is None:
+                        continue
+                    prev = df_1h.iloc[-2]
+                    prev_high = float(prev['High'])
+                    prev_low = float(prev['Low'])
+                    sig = None
+
+                    if 0 <= now.minute <= 15:
+                        df_5m = get_data(symbol, "5m", "1d")
+                        if df_5m is not None:
+                            sig = check_strategy_1_with_5m(df_5m, prev_high, prev_low)
+
+                    if sig is None:
+                        df_1m = get_data(symbol, "1m", "1d")
+                        if df_1m is not None:
+                            sig = check_strategy_2_with_1m(df_1m, prev_high, prev_low)
+
+                    if sig:
+                        key = f"{hour_key}-{pair}-{sig['strategy']}-{sig['type']}"
+                        if key not in sent_signals:
+                            sent_signals.add(key)
+                            send_telegram(format_signal(pair, sig))
+                            print(f"SENT: {pair} {sig['type']} {sig['strategy']}")
+                except Exception as e:
+                    print(f"Error {pair}: {e}")
+                    continue
+            time.sleep(60)
         except Exception as e:
-            print(f"Main error: {e}", flush=True)
+            print(f"Loop error: {e}")
             time.sleep(60)
 
 if __name__ == "__main__":
