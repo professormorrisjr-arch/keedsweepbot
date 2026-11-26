@@ -1,6 +1,11 @@
 services:
-    - type: worker
+    - type: web
     name: keedsweepbot
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    envVars:
+            - key: TELEGRAM_BOT_TOKEN
+        sync: false
+            - key: TELEGRAM_CHAT_ID
+        sync: false
