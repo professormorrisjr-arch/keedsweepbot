@@ -103,27 +103,32 @@ def check_s1(sym, df5, prev):
     ph, pl, mid = prev["high"], prev["low"], (prev["high"]+prev["low"])/2
     now_b = datetime.now(BROKER_TZ)
     hour_start = now_b.replace(minute=0, second=0, microsecond=0)
-    # FIXED: ONLY closed 5M candles - wait for close inside
+    # FIXED: ONLY closed 5M candles
     df = df5[(df5["t_broker"] >= hour_start) & (df5["t_broker"] + pd.Timedelta(minutes=5) <= now_b)].copy()
     if df.empty: return None
-    for _, row in df.iterrows():
-        c = float(row["c"]); h = float(row["h"]); l = float(row["l"])
-        if c > ph or c < pl:
-            return None
-        if h > ph and c < ph and c > pl:
-            entry = c; sl = float(row["h"]); tp1 = mid; tp2 = pl
-            if entry <= mid: return None
-            if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
-            if to_pips(tp1 - entry, sym) < 5: return None
-            return ("STRATEGY 1", "SELL 🔴", entry, sl, tp1, tp2, row["t_broker"])
-        if l < pl and c > pl and c < ph:
-            entry = c; sl = float(row["l"]); tp1 = mid; tp2 = ph
-            if entry >= mid: return None
-            if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
-            if to_pips(tp1 - entry, sym) < 5: return None
-            return ("STRATEGY 1", "BUY 🟢", entry, sl, tp1, tp2, row["t_broker"])
-        if row["t_broker"].minute > 20:
-            break
+    # FIXED: ONLY the latest closed candle - don't dig up old candles on restart
+    row = df.iloc[-1]
+    c = float(row["c"]); h = float(row["h"]); l = float(row["l"])
+    # FIXED: FRESHNESS - candle must have closed within last 6 minutes
+    closed_at = row["t_broker"] + pd.Timedelta(minutes=5)
+    if (now_b - closed_at).total_seconds() > 360:
+        return None
+    if c > ph or c < pl:
+        return None
+    if h > ph and c < ph and c > pl:
+        entry = c; sl = float(row["h"]); tp1 = mid; tp2 = pl
+        if entry <= mid: return None
+        if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
+        if to_pips(entry - sl, sym) > 30: return None
+        if to_pips(tp1 - entry, sym) < 5: return None
+        return ("STRATEGY 1", "SELL 🔴", entry, sl, tp1, tp2, row["t_broker"])
+    if l < pl and c > pl and c < ph:
+        entry = c; sl = float(row["l"]); tp1 = mid; tp2 = ph
+        if entry >= mid: return None
+        if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
+        if to_pips(entry - sl, sym) > 30: return None
+        if to_pips(tp1 - entry, sym) < 5: return None
+        return ("STRATEGY 1", "BUY 🟢", entry, sl, tp1, tp2, row["t_broker"])
     return None
 
 def check_s2(sym, df1, prev):
