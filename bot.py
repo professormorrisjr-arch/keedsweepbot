@@ -1,12 +1,12 @@
 import os, time, threading, requests, traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 from flask import Flask
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "KeedSweepBot v3 LIVE - Locked + Range Filter"
+def home(): return "KeedSweepBot LIVE"
 @app.route('/health')
 def health(): return "OK"
 
@@ -16,7 +16,7 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 print(f"TOKEN set: {bool(TOKEN)} CHAT_ID set: {bool(CHAT_ID)}", flush=True)
 
@@ -60,7 +60,6 @@ def fmt_price(sym, v):
     return f"{v:.5f}"
 
 def format_signal(sym, strat, direction, entry, sl, tp1, tp2, prev_high, prev_low, candle_time):
-    mid = (prev_high + prev_low) / 2
     sl_p = to_pips(entry - sl, sym)
     tp1_p = to_pips(tp1 - entry, sym)
     tp2_p = to_pips(tp2 - entry, sym)
@@ -97,21 +96,15 @@ def get_just_closed_h1(df5):
     row = df.iloc[-2]
     return {"high": float(row["h"]), "low": float(row["l"]), "close": float(row["c"]), "time": df.index[-2]}
 
-def check_range_ok(sym, prev_high, prev_low):
-    rng = to_pips(prev_high - prev_low, sym)
-    return rng >= MIN_RANGE_PIPS[sym], rng
-
-def check_sl_ok(sym, entry, sl):
-    return to_pips(entry - sl, sym) >= MIN_SL_PIPS
-
 def check_s1(sym, df5, prev):
     if prev is None: return None
-    ok, rng = check_range_ok(sym, prev["high"], prev["low"])
-    if not ok: return None
+    rng = to_pips(prev["high"] - prev["low"], sym)
+    if rng < MIN_RANGE_PIPS[sym]: return None
     ph, pl, mid = prev["high"], prev["low"], (prev["high"]+prev["low"])/2
     now_b = datetime.now(BROKER_TZ)
     hour_start = now_b.replace(minute=0, second=0, microsecond=0)
-    df = df5[df5["t_broker"] >= hour_start].copy()
+    # FIXED: ONLY closed 5M candles - wait for close inside
+    df = df5[(df5["t_broker"] >= hour_start) & (df5["t_broker"] + pd.Timedelta(minutes=5) <= now_b)].copy()
     if df.empty: return None
     for _, row in df.iterrows():
         c = float(row["c"]); h = float(row["h"]); l = float(row["l"])
@@ -120,14 +113,14 @@ def check_s1(sym, df5, prev):
         if h > ph and c < ph and c > pl:
             entry = c; sl = float(row["h"]); tp1 = mid; tp2 = pl
             if entry <= mid: return None
-            if not check_sl_ok(sym, entry, sl): return None
-            if to_pips(tp1 - entry, sym) < 1: return None
+            if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
+            if to_pips(tp1 - entry, sym) < 5: return None
             return ("STRATEGY 1", "SELL 🔴", entry, sl, tp1, tp2, row["t_broker"])
         if l < pl and c > pl and c < ph:
             entry = c; sl = float(row["l"]); tp1 = mid; tp2 = ph
             if entry >= mid: return None
-            if not check_sl_ok(sym, entry, sl): return None
-            if to_pips(tp1 - entry, sym) < 1: return None
+            if to_pips(entry - sl, sym) < MIN_SL_PIPS: return None
+            if to_pips(tp1 - entry, sym) < 5: return None
             return ("STRATEGY 1", "BUY 🟢", entry, sl, tp1, tp2, row["t_broker"])
         if row["t_broker"].minute > 20:
             break
@@ -135,43 +128,36 @@ def check_s1(sym, df5, prev):
 
 def check_s2(sym, df1, prev):
     if prev is None: return None
-    ok, rng = check_range_ok(sym, prev["high"], prev["low"])
-    if not ok: return None
     ph, pl, mid = prev["high"], prev["low"], (prev["high"]+prev["low"])/2
-    if df1 is None or len(df1) < 30: return None
-    df = df1.tail(60).reset_index(drop=True)
-    highs = df["h"].values; lows = df["l"].values; closes = df["c"].values
-    for i in range(5, len(df)-5):
-        for j in range(i+3, len(df)-2):
-            p1, p2 = float(highs[i]), float(highs[j])
-            if abs(p1 - p2) <= (ph - pl) * 0.10 and p1 >= ph - (ph-pl)*0.15 and p2 >= ph - (ph-pl)*0.15:
-                valley = float(min(lows[i:j+1]))
-                for k in range(j+1, len(df)):
-                    if float(closes[k]) < valley:
-                        entry = float(closes[k]); sl = max(p1, p2); tp1 = mid; tp2 = pl
-                        if entry <= mid: return None
-                        if not check_sl_ok(sym, entry, sl): return None
-                        if to_pips(tp1 - entry, sym) < 1: return None
-                        return ("STRATEGY 2", "SELL 🔴", entry, sl, tp1, tp2, df.iloc[k]["t_broker"])
-                break
-    for i in range(5, len(df)-5):
-        for j in range(i+3, len(df)-2):
-            p1, p2 = float(lows[i]), float(lows[j])
-            if abs(p1 - p2) <= (ph - pl) * 0.10 and p1 <= pl + (ph-pl)*0.15 and p2 <= pl + (ph-pl)*0.15:
-                peak = float(max(highs[i:j+1]))
-                for k in range(j+1, len(df)):
-                    if float(closes[k]) > peak:
-                        entry = float(closes[k]); sl = min(p1, p2); tp1 = mid; tp2 = ph
-                        if entry >= mid: return None
-                        if not check_sl_ok(sym, entry, sl): return None
-                        if to_pips(tp1 - entry, sym) < 1: return None
-                        return ("STRATEGY 2", "BUY 🟢", entry, sl, tp1, tp2, df.iloc[k]["t_broker"])
-                break
+    rng = to_pips(ph - pl, sym)
+    if rng < MIN_RANGE_PIPS[sym]: return None
+    df = df1.tail(60).copy()
+    if len(df) < 10: return None
+    for i in range(5, len(df)):
+        w = df.iloc[i-5:i+1]
+        c = float(df.iloc[i]["c"])
+        hh = float(w["h"].max()); ll = float(w["l"].min())
+        eq_h = (hh - ph) <= (0.2 * (ph - pl) / 10 + PIP_SIZE[sym]*2)
+        eq_l = (pl - ll) <= (0.2 * (ph - pl) / 10 + PIP_SIZE[sym]*2)
+        valley = float(w["l"].min())
+        peak = float(w["h"].max())
+        if eq_h and c < valley and c < ph and c > pl:
+            entry = c; sl = hh; tp1 = mid; tp2 = pl
+            if entry <= mid: continue
+            if to_pips(entry - sl, sym) < MIN_SL_PIPS: continue
+            if to_pips(tp1 - entry, sym) < 1: continue
+            return ("STRATEGY 2", "SELL 🔴", entry, sl, tp1, tp2, df.iloc[i]["t_broker"])
+        if eq_l and c > peak and c > pl and c < ph:
+            entry = c; sl = ll; tp1 = mid; tp2 = ph
+            if entry >= mid: continue
+            if to_pips(entry - sl, sym) < MIN_SL_PIPS: continue
+            if to_pips(tp1 - entry, sym) < 1: continue
+            return ("STRATEGY 2", "BUY 🟢", entry, sl, tp1, tp2, df.iloc[i]["t_broker"])
     return None
 
 sent = {}
 def bot_loop():
-    send("✅ KeedSweepBot v3 LIVE - Locked 12 Pairs | Just-Closed H1 | 5M S1 0-20min | 1M S2 Equal + CHOCH | + Range Filter FIX")
+    send("✅ KeedSweepBot LIVE - S1 FIXED: Waits for 5M Close Inside | S1 + S2")
     print("Bot loop started", flush=True)
     while True:
         try:
@@ -189,14 +175,15 @@ def bot_loop():
                             sent[key] = True
                             _, direction, entry, sl, tp1, tp2, ct = s1
                             send(format_signal(sym, "STRATEGY 1", direction, entry, sl, tp1, tp2, prev["high"], prev["low"], ct.strftime("%H:%M")))
-                    df1 = get_data(ticker, "1m", period="1d")
-                    s2 = check_s2(sym, df1, prev)
-                    if s2:
-                        key = key_base + "_S2_" + s2[1]
-                        if key not in sent:
-                            sent[key] = True
-                            _, direction, entry, sl, tp1, tp2, ct = s2
-                            send(format_signal(sym, "STRATEGY 2", direction, entry, sl, tp1, tp2, prev["high"], prev["low"], ct.strftime("%H:%M")))
+                    df1 = get_data(ticker, "1m")
+                    if df1 is not None:
+                        s2 = check_s2(sym, df1, prev)
+                        if s2:
+                            key = key_base + "_S2_" + s2[1]
+                            if key not in sent:
+                                sent[key] = True
+                                _, direction, entry, sl, tp1, tp2, ct = s2
+                                send(format_signal(sym, "STRATEGY 2", direction, entry, sl, tp1, tp2, prev["high"], prev["low"], ct.strftime("%H:%M")))
                 except Exception as e:
                     print(f"Pair err {sym}: {e}", flush=True)
             time.sleep(55)
